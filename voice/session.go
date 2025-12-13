@@ -20,7 +20,7 @@ import (
 )
 
 // Protocol is the encryption protocol that this library uses.
-const Protocol = "xsalsa20_poly1305"
+const Protocol = "aead_xchacha20_poly1305_rtpsize"
 
 // ErrAlreadyConnecting is returned when the session is already connecting.
 var ErrAlreadyConnecting = errors.New("already connecting")

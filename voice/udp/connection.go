@@ -3,6 +3,7 @@ package udp
 import (
 	"bytes"
 	"context"
+	"crypto/cipher"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -11,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/nacl/secretbox"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // ErrDecryptionFailed is returned from ReadPacket if the received packet fails
@@ -38,11 +39,12 @@ type Connection struct {
 	stopFreq  chan struct{}
 
 	packet [12]byte
-	secret [32]byte
+	aead   cipher.AEAD
 
-	sequence  uint16
-	timestamp uint32
-	nonce     [24]byte
+	rtpSequence   uint16
+	rtpTimestamp  uint32
+	nonceSequence uint32
+	nonce         [24]byte
 
 	// recv fields
 	recvNonce  [24]byte
@@ -177,7 +179,8 @@ func (c *Connection) ResetFrequency(frameDuration time.Duration, timeIncr uint32
 // UseSecret uses the given secret. This method is not thread-safe, so it should
 // only be used right after initialization.
 func (c *Connection) UseSecret(secret [32]byte) {
-	c.secret = secret
+	aead, _ := chacha20poly1305.NewX(secret[:])
+	c.aead = aead
 }
 
 // SetWriteDeadline sets the UDP connection's write deadline.
@@ -206,18 +209,23 @@ func (c *Connection) Close() error {
 // the real playback time.
 func (c *Connection) Write(b []byte) (int, error) {
 	// Write a new sequence.
-	binary.BigEndian.PutUint16(c.packet[2:4], c.sequence)
-	c.sequence++
+	binary.BigEndian.PutUint16(c.packet[2:4], c.rtpSequence)
+	c.rtpSequence++
 
-	binary.BigEndian.PutUint32(c.packet[4:8], c.timestamp)
-	c.timestamp += c.timeIncr
+	binary.BigEndian.PutUint32(c.packet[4:8], c.rtpTimestamp)
+	c.rtpTimestamp += c.timeIncr
 
-	// Copy the first 12 bytes from the packet into the nonce.
-	copy(c.nonce[:12], c.packet[:])
+	// Increase the nonce for each packet.
+	binary.LittleEndian.PutUint32(c.nonce[:4], c.nonceSequence)
+	c.nonceSequence++
 
 	// Seal the message, but reuse the packet buffer. We pass in the first 12
-	// bytes of the packet, but allow it to reuse the whole packet buffer
-	toSend := secretbox.Seal(c.packet[:12], b, &c.nonce, &c.secret)
+	// bytes of the packet, but allow it to reuse the whole packet buffer.
+	// The header is authenticated, while the rest of the packet is encrypted.
+	toSend := c.aead.Seal(c.packet[:12], c.nonce[:], b, c.packet[:12])
+
+	// Append the nonce at the end of the packet.
+	toSend = append(toSend, c.nonce[:4]...)
 
 	select {
 	case <-c.frequency.C:
@@ -285,14 +293,12 @@ func (c *Connection) ReadPacket() (*Packet, error) {
 		// Copy the nonce to be read.
 		// TODO: once Go 1.17 is released, we can remove recvNonce and directly
 		// cast it as (*[packetHeaderSize]byte)(c.recvBuf).
-		copy(c.recvNonce[:], c.recvBuf[0:packetHeaderSize])
-
-		var ok bool
+		copy(c.recvNonce[:], c.recvBuf[len(c.recvBuf)-4:])
 
 		// Open (decrypt) the rest of the received bytes.
-		c.recvPacket.Opus, ok = secretbox.Open(
-			c.recvOpus[:0], c.recvBuf[packetHeaderSize:i], &c.recvNonce, &c.secret)
-		if !ok {
+		c.recvPacket.Opus, err = c.aead.Open(
+			c.recvOpus[:0], c.recvNonce[:], c.recvBuf[packetHeaderSize:i-4], c.recvPacket.header)
+		if err != nil {
 			return nil, ErrDecryptionFailed
 		}
 
