@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/diamondburned/arikawa/v3/utils/ws"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -179,6 +180,7 @@ func (c *Connection) ResetFrequency(frameDuration time.Duration, timeIncr uint32
 // UseSecret uses the given secret. This method is not thread-safe, so it should
 // only be used right after initialization.
 func (c *Connection) UseSecret(secret [32]byte) {
+	ws.WSDebug("RTP encryption key:", secret)
 	aead, _ := chacha20poly1305.NewX(secret[:])
 	c.aead = aead
 }
@@ -216,7 +218,7 @@ func (c *Connection) Write(b []byte) (int, error) {
 	c.rtpTimestamp += c.timeIncr
 
 	// Increase the nonce for each packet.
-	binary.LittleEndian.PutUint32(c.nonce[:4], c.nonceSequence)
+	binary.BigEndian.PutUint32(c.nonce[:4], c.nonceSequence)
 	c.nonceSequence++
 
 	// Seal the message, but reuse the packet buffer. We pass in the first 12
@@ -294,6 +296,7 @@ func (c *Connection) ReadPacket() (*Packet, error) {
 		// TODO: once Go 1.17 is released, we can remove recvNonce and directly
 		// cast it as (*[packetHeaderSize]byte)(c.recvBuf).
 		copy(c.recvNonce[:], c.recvBuf[len(c.recvBuf)-4:])
+		ws.WSDebug("Recv nonce:", c.recvNonce)
 
 		// Open (decrypt) the rest of the received bytes.
 		c.recvPacket.Opus, err = c.aead.Open(
