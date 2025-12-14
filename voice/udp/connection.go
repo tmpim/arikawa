@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/diamondburned/arikawa/v3/utils/ws"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -180,7 +179,6 @@ func (c *Connection) ResetFrequency(frameDuration time.Duration, timeIncr uint32
 // UseSecret uses the given secret. This method is not thread-safe, so it should
 // only be used right after initialization.
 func (c *Connection) UseSecret(secret [32]byte) {
-	ws.WSDebug("RTP encryption key:", secret)
 	aead, _ := chacha20poly1305.NewX(secret[:])
 	c.aead = aead
 }
@@ -288,23 +286,6 @@ func (c *Connection) ReadPacket() (*Packet, error) {
 			return nil, err
 		}
 
-		if i < packetHeaderSize || (c.recvBuf[0] != 0x80 && c.recvBuf[0] != 0x90) {
-			continue
-		}
-
-		// Copy the nonce to be read.
-		// TODO: once Go 1.17 is released, we can remove recvNonce and directly
-		// cast it as (*[packetHeaderSize]byte)(c.recvBuf).
-		copy(c.recvNonce[:], c.recvBuf[len(c.recvBuf)-4:])
-		ws.WSDebug("Recv nonce:", c.recvNonce)
-
-		// Open (decrypt) the rest of the received bytes.
-		c.recvPacket.Opus, err = c.aead.Open(
-			c.recvOpus[:0], c.recvNonce[:], c.recvBuf[packetHeaderSize:i-4], c.recvPacket.header)
-		if err != nil {
-			return nil, ErrDecryptionFailed
-		}
-
 		// Partial structure of the RTP header for reference
 		//
 		//     0                   1                   2                   3
@@ -354,11 +335,33 @@ func (c *Connection) ReadPacket() (*Packet, error) {
 		// unknown sections, so we do a (NOT isMarker) check below.
 		isMarker := c.recvPacket.Type()&0x80 != 0x0
 
-		if isExtension && !isMarker {
-			extLen := binary.BigEndian.Uint16(c.recvPacket.Opus[2:4])
-			shift := 4 + 4*int(extLen)
+		// Ignore the packet if it seems to be malformed or looks like a RTCP packet
+		// TODO: could the last check use the isMarker flag?
+		if (i < packetHeaderSize) || (c.recvBuf[0]&0xC0 != 0x80) || (c.recvBuf[1]&0x80 != 0x00) {
+			continue
+		}
 
-			if len(c.recvPacket.Opus) > shift {
+		csrcCount := int(c.recvBuf[0] & 0x0F)
+		hdrSize := packetHeaderSize + 4*csrcCount
+		if isExtension {
+			hdrSize += 4
+		}
+
+		// Copy the nonce to be read. The nonce is the last 4 bytes of the payload.
+		copy(c.recvNonce[:], c.recvBuf[i-4:i])
+
+		// Open (decrypt) the rest of the received bytes.
+		c.recvPacket.Opus, err = c.aead.Open(
+			c.recvOpus[:0], c.recvNonce[:], c.recvBuf[hdrSize:i-4], c.recvBuf[:hdrSize])
+		if err != nil {
+			return nil, ErrDecryptionFailed
+		}
+
+		if isExtension && !isMarker {
+			extLen := binary.BigEndian.Uint16(c.recvBuf[hdrSize-2 : hdrSize])
+			shift := 4 * int(extLen)
+
+			if shift > 0 && len(c.recvPacket.Opus) > shift {
 				c.recvPacket.Opus = c.recvPacket.Opus[shift:]
 			}
 		}
