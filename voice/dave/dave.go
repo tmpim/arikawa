@@ -5,7 +5,6 @@ package dave
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/libdave/cpp/build/install/include
-#cgo LDFLAGS: ${SRCDIR}/libdave/cpp/build/install/lib/libdave.a -lstdc++ -lssl -lcrypto -lm
 #include "dave/dave.h"
 #include <stdlib.h>
 */
@@ -108,7 +107,7 @@ type CommitResult struct {
 
 // IsFailed reports whether processing the commit failed.
 func (r *CommitResult) IsFailed() bool {
-	if r.h == nil {
+	if r == nil || r.h == nil {
 		return true
 	}
 	return bool(C.daveCommitResultIsFailed(r.h))
@@ -116,7 +115,7 @@ func (r *CommitResult) IsFailed() bool {
 
 // IsIgnored reports whether the commit should be ignored.
 func (r *CommitResult) IsIgnored() bool {
-	if r.h == nil {
+	if r == nil || r.h == nil {
 		return false
 	}
 	return bool(C.daveCommitResultIsIgnored(r.h))
@@ -329,6 +328,12 @@ func (d *Decryptor) Close() {
 // The decryptor does NOT take ownership; the caller must keep the ratchet alive.
 func (d *Decryptor) TransitionToKeyRatchet(r *KeyRatchet) {
 	C.daveDecryptorTransitionToKeyRatchet(d.h, r.h)
+}
+
+// SetPassthroughMode enables or disables passthrough mode on the decryptor.
+// In passthrough mode, frames are returned unmodified without decryption.
+func (d *Decryptor) SetPassthroughMode(passthrough bool) {
+	C.daveDecryptorTransitionToPassthroughMode(d.h, C.bool(passthrough))
 }
 
 // Decrypt decrypts a DAVE-encrypted Opus audio frame.
