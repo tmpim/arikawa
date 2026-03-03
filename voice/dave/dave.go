@@ -4,7 +4,7 @@
 package dave
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/libdave/cpp/build/install/include
+#cgo CFLAGS: -I${SRCDIR}/include
 #include "dave/dave.h"
 #include <stdlib.h>
 */
