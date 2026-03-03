@@ -107,13 +107,26 @@ type CommitResult struct {
 }
 
 // IsFailed reports whether processing the commit failed.
-func (r *CommitResult) IsFailed() bool { return bool(C.daveCommitResultIsFailed(r.h)) }
+func (r *CommitResult) IsFailed() bool {
+	if r.h == nil {
+		return true
+	}
+	return bool(C.daveCommitResultIsFailed(r.h))
+}
 
 // IsIgnored reports whether the commit should be ignored.
-func (r *CommitResult) IsIgnored() bool { return bool(C.daveCommitResultIsIgnored(r.h)) }
+func (r *CommitResult) IsIgnored() bool {
+	if r.h == nil {
+		return false
+	}
+	return bool(C.daveCommitResultIsIgnored(r.h))
+}
 
 // RosterMemberIDs returns the list of user IDs in the roster after the commit.
 func (r *CommitResult) RosterMemberIDs() []uint64 {
+	if r == nil || r.h == nil {
+		return nil
+	}
 	var ptr *C.uint64_t
 	var length C.size_t
 	C.daveCommitResultGetRosterMemberIds(r.h, &ptr, &length)
@@ -131,21 +144,25 @@ func (r *CommitResult) RosterMemberIDs() []uint64 {
 
 // Close frees the commit result.
 func (r *CommitResult) Close() {
-	if r.h != nil {
-		C.daveCommitResultDestroy(r.h)
-		r.h = nil
+	if r == nil || r.h == nil {
+		return
 	}
+	C.daveCommitResultDestroy(r.h)
+	r.h = nil
 }
 
 // ProcessCommit processes an incoming MLS commit and returns a CommitResult.
 // Caller must call Close() on the result.
 func (s *MlsSession) ProcessCommit(commit []byte) *CommitResult {
 	if len(commit) == 0 {
-		return &CommitResult{}
+		return nil
 	}
 	h := C.daveSessionProcessCommit(s.h,
 		(*C.uint8_t)(unsafe.Pointer(&commit[0])),
 		C.size_t(len(commit)))
+	if h == nil {
+		return nil
+	}
 	return &CommitResult{h: h}
 }
 
@@ -261,6 +278,9 @@ func (e *Encryptor) Encrypt(ssrc uint32, frame []byte) ([]byte, error) {
 	maxSize := C.daveEncryptorGetMaxCiphertextByteSize(e.h,
 		C.DAVE_MEDIA_TYPE_AUDIO, C.size_t(len(frame)))
 
+	if maxSize == 0 {
+		return frame, nil
+	}
 	out := make([]byte, int(maxSize))
 	var written C.size_t
 
@@ -321,6 +341,9 @@ func (d *Decryptor) Decrypt(frame []byte) ([]byte, error) {
 	maxSize := C.daveDecryptorGetMaxPlaintextByteSize(d.h,
 		C.DAVE_MEDIA_TYPE_AUDIO, C.size_t(len(frame)))
 
+	if maxSize == 0 {
+		return frame, nil
+	}
 	out := make([]byte, int(maxSize))
 	var written C.size_t
 
@@ -356,6 +379,7 @@ func cBytesToGo(ptr *C.uint8_t, length C.size_t) []byte {
 }
 
 // toCStringArray converts a Go string slice to a **C.char array.
+// The pointer array is allocated on the C heap to satisfy CGo pointer rules.
 // The returned free function must be called when done.
 func toCStringArray(strs []string) (**C.char, func()) {
 	if len(strs) == 0 {
@@ -365,9 +389,16 @@ func toCStringArray(strs []string) (**C.char, func()) {
 	for i, s := range strs {
 		ptrs[i] = C.CString(s)
 	}
-	return &ptrs[0], func() {
+	// Allocate the pointer array on the C heap to satisfy CGo pointer rules.
+	size := C.size_t(len(ptrs)) * C.size_t(unsafe.Sizeof((*C.char)(nil)))
+	cArray := (**C.char)(C.malloc(size))
+	for i, p := range ptrs {
+		*(**C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(cArray)) + uintptr(i)*unsafe.Sizeof((*C.char)(nil)))) = p
+	}
+	return cArray, func() {
 		for _, p := range ptrs {
 			C.free(unsafe.Pointer(p))
 		}
+		C.free(unsafe.Pointer(cArray))
 	}
 }
