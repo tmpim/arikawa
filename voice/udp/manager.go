@@ -34,6 +34,8 @@ type Manager struct {
 
 	frequency time.Duration
 	timeIncr  uint32
+
+	ssrc uint32
 }
 
 // NewManager creates a new UDP connection manager with the default dial
@@ -156,6 +158,8 @@ func (m *Manager) Dial(ctx context.Context, addr string, ssrc uint32) (*Connecti
 		return nil, fmt.Errorf("failed to dial: %w", err)
 	}
 
+	m.ssrc = ssrc
+
 	if m.frequency > 0 && m.timeIncr > 0 {
 		conn.ResetFrequency(m.frequency, m.timeIncr)
 	}
@@ -169,6 +173,9 @@ func (m *Manager) Dial(ctx context.Context, addr string, ssrc uint32) (*Connecti
 
 	return conn, nil
 }
+
+// SSRC returns the SSRC number assigned to this connection.
+func (m *Manager) SSRC() uint32 { return m.ssrc }
 
 // ResetFrequency sets the current connection and future connections' write
 // frequency. Note that calling this method while Connection is being used in a
