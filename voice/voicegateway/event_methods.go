@@ -18,6 +18,17 @@ func init() {
 		func() ws.Event { return new(ResumedEvent) },
 		func() ws.Event { return new(ClientConnectEvent) },
 		func() ws.Event { return new(ClientDisconnectEvent) },
+		func() ws.Event { return new(DavePrepareTransitionEvent) },
+		func() ws.Event { return new(DaveExecuteTransitionEvent) },
+		func() ws.Event { return new(DaveReadyForTransitionCommand) },
+		func() ws.Event { return new(DavePrepareEpochEvent) },
+		func() ws.Event { return new(MLSExternalSenderPackageEvent) },
+		func() ws.Event { return new(MLSKeyPackageCommand) },
+		func() ws.Event { return new(MLSProposalsEvent) },
+		func() ws.Event { return new(MLSCommitWelcomeCommand) },
+		func() ws.Event { return new(MLSPrepareCommitTransitionEvent) },
+		func() ws.Event { return new(MLSWelcomeEvent) },
+		func() ws.Event { return new(MLSInvalidCommitWelcomeCommand) },
 	)
 }
 
@@ -92,3 +103,69 @@ func (*ClientDisconnectEvent) Op() ws.OpCode { return 13 }
 
 // EventType implements Event.
 func (*ClientDisconnectEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 21.
+func (*DavePrepareTransitionEvent) Op() ws.OpCode { return 21 }
+
+// EventType implements Event.
+func (*DavePrepareTransitionEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 22.
+func (*DaveExecuteTransitionEvent) Op() ws.OpCode { return 22 }
+
+// EventType implements Event.
+func (*DaveExecuteTransitionEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 23.
+func (*DaveReadyForTransitionCommand) Op() ws.OpCode { return 23 }
+
+// EventType implements Event.
+func (*DaveReadyForTransitionCommand) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 24.
+func (*DavePrepareEpochEvent) Op() ws.OpCode { return 24 }
+
+// EventType implements Event.
+func (*DavePrepareEpochEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 25.
+func (*MLSExternalSenderPackageEvent) Op() ws.OpCode { return 25 }
+
+// EventType implements Event.
+func (*MLSExternalSenderPackageEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 26.
+func (*MLSKeyPackageCommand) Op() ws.OpCode { return 26 }
+
+// EventType implements Event.
+func (*MLSKeyPackageCommand) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 27.
+func (*MLSProposalsEvent) Op() ws.OpCode { return 27 }
+
+// EventType implements Event.
+func (*MLSProposalsEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 28.
+func (*MLSCommitWelcomeCommand) Op() ws.OpCode { return 28 }
+
+// EventType implements Event.
+func (*MLSCommitWelcomeCommand) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 29.
+func (*MLSPrepareCommitTransitionEvent) Op() ws.OpCode { return 29 }
+
+// EventType implements Event.
+func (*MLSPrepareCommitTransitionEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 30.
+func (*MLSWelcomeEvent) Op() ws.OpCode { return 30 }
+
+// EventType implements Event.
+func (*MLSWelcomeEvent) EventType() ws.EventType { return "" }
+
+// Op implements Event. It always returns Op 31.
+func (*MLSInvalidCommitWelcomeCommand) Op() ws.OpCode { return 31 }
+
+// EventType implements Event.
+func (*MLSInvalidCommitWelcomeCommand) EventType() ws.EventType { return "" }
