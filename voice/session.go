@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/diamondburned/arikawa/v3/utils/handler"
 	"github.com/diamondburned/arikawa/v3/utils/ws"
 	"github.com/diamondburned/arikawa/v3/utils/ws/ophandler"
+	"github.com/diamondburned/arikawa/v3/voice/dave"
 	"github.com/diamondburned/arikawa/v3/voice/udp"
 	"github.com/diamondburned/arikawa/v3/voice/voicegateway"
 )
@@ -84,6 +86,8 @@ type Session struct {
 	udpManager *udp.Manager
 
 	gateway  *voicegateway.Gateway
+	dave     *dave.Session
+	daveDone []func() // remove fns for DAVE event handlers
 	gwCancel context.CancelFunc
 	gwDone   <-chan struct{}
 
@@ -415,6 +419,10 @@ func (s *Session) reconnectCtx(ctx context.Context) error {
 	// Start dispatching.
 	s.gwDone = ophandler.Loop(gwch, s.Handler)
 
+	if s.dave != nil {
+		s.wireDaveHandlers()
+	}
+
 	ws.WSDebug("Voice reconnectCtx finished with no error")
 
 	return nil
@@ -423,6 +431,7 @@ func (s *Session) reconnectCtx(ctx context.Context) error {
 func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 	var err error
 	var conn *udp.Connection
+	var daveReady bool
 
 	for {
 		select {
@@ -449,9 +458,10 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 				if err := s.gateway.Send(ctx, &voicegateway.SelectProtocolCommand{
 					Protocol: "udp",
 					Data: voicegateway.SelectProtocolData{
-						Address: conn.GatewayIP,
-						Port:    conn.GatewayPort,
-						Mode:    Protocol,
+						Address:             conn.GatewayIP,
+						Port:                conn.GatewayPort,
+						Mode:                Protocol,
+						DAVEProtocolVersion: dave.MaxSupportedProtocolVersion(),
 					},
 				}); err != nil {
 					return fmt.Errorf("failed to send SelectProtocolCommand: %w", err)
@@ -463,15 +473,111 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 				}
 
 				ws.WSDebug("Received secret key from voice gateway")
-
-				// We're done.
 				conn.UseSecret(data.SecretKey)
-				return nil
+
+				if data.DAVEProtocolVersion > 0 {
+					daveSession, err := dave.NewSession(s.gateway, s.state.UserID, uint64(s.state.GuildID))
+					if err != nil {
+						return fmt.Errorf("failed to create DAVE session: %w", err)
+					}
+					s.mut.Lock()
+					s.dave = daveSession
+					s.mut.Unlock()
+					// Continue spinning to complete DAVE handshake.
+				} else {
+					return nil
+				}
+
+			case *voicegateway.DavePrepareEpochEvent:
+				if s.dave != nil {
+					if err := s.dave.OnPrepareEpoch(data.Epoch, data.ProtocolVersion); err != nil {
+						return fmt.Errorf("DAVE prepare epoch: %w", err)
+					}
+				}
+
+			case *voicegateway.MLSExternalSenderPackageEvent:
+				if s.dave != nil {
+					s.dave.OnExternalSenderPackage(data.Package)
+				}
+
+			case *voicegateway.MLSProposalsEvent:
+				if s.dave != nil {
+					if err := s.dave.OnProposals(ctx, data.Proposals); err != nil {
+						return fmt.Errorf("DAVE proposals: %w", err)
+					}
+				}
+
+			case *voicegateway.MLSPrepareCommitTransitionEvent:
+				if s.dave != nil {
+					if err := s.dave.OnPrepareCommitTransition(ctx, data.TransitionID, data.Commit); err != nil {
+						return fmt.Errorf("DAVE prepare commit transition: %w", err)
+					}
+				}
+
+			case *voicegateway.MLSWelcomeEvent:
+				if s.dave != nil {
+					if err := s.dave.OnWelcome(ctx, data.TransitionID, data.Welcome); err != nil {
+						return fmt.Errorf("DAVE welcome: %w", err)
+					}
+				}
+
+			case *voicegateway.DavePrepareTransitionEvent:
+				if s.dave != nil {
+					if err := s.dave.OnPrepareTransition(ctx, data.TransitionID, data.ProtocolVersion); err != nil {
+						return fmt.Errorf("DAVE prepare transition: %w", err)
+					}
+				}
+
+			case *voicegateway.DaveExecuteTransitionEvent:
+				if s.dave != nil {
+					s.dave.OnExecuteTransition(data.TransitionID)
+					if !daveReady {
+						daveReady = true
+						return nil
+					}
+				}
 			}
 
 			// Dispatch this event to the handler.
 			s.Handler.Call(ev.Data)
 		}
+	}
+}
+
+// wireDaveHandlers registers persistent event handlers for ongoing DAVE key
+// rotation events. Called after the initial DAVE handshake completes.
+func (s *Session) wireDaveHandlers() {
+	ctx := context.Background()
+	s.daveDone = []func(){
+		s.Handler.AddHandler(func(ev *voicegateway.DavePrepareTransitionEvent) {
+			if err := s.dave.OnPrepareTransition(ctx, ev.TransitionID, ev.ProtocolVersion); err != nil {
+				log.Printf("voice: DAVE prepare transition: %v", err)
+			}
+		}),
+		s.Handler.AddHandler(func(ev *voicegateway.DaveExecuteTransitionEvent) {
+			s.dave.OnExecuteTransition(ev.TransitionID)
+		}),
+		s.Handler.AddHandler(func(ev *voicegateway.MLSProposalsEvent) {
+			if err := s.dave.OnProposals(ctx, ev.Proposals); err != nil {
+				log.Printf("voice: DAVE proposals: %v", err)
+			}
+		}),
+		s.Handler.AddHandler(func(ev *voicegateway.MLSPrepareCommitTransitionEvent) {
+			if err := s.dave.OnPrepareCommitTransition(ctx, ev.TransitionID, ev.Commit); err != nil {
+				log.Printf("voice: DAVE prepare commit transition: %v", err)
+			}
+		}),
+		s.Handler.AddHandler(func(ev *voicegateway.MLSWelcomeEvent) {
+			if err := s.dave.OnWelcome(ctx, ev.TransitionID, ev.Welcome); err != nil {
+				log.Printf("voice: DAVE welcome: %v", err)
+			}
+		}),
+		s.Handler.AddHandler(func(ev *voicegateway.ClientConnectEvent) {
+			s.dave.AddUser(ev.UserID)
+		}),
+		s.Handler.AddHandler(func(ev *voicegateway.ClientDisconnectEvent) {
+			s.dave.RemoveUser(ev.UserID)
+		}),
 	}
 }
 
@@ -498,6 +604,17 @@ func (s *Session) Speaking(ctx context.Context, flag voicegateway.SpeakingFlag) 
 // as calling other methods of Session goes; HOWEVER it is not thread safe to
 // call Write itself concurrently.
 func (s *Session) Write(b []byte) (int, error) {
+	s.mut.RLock()
+	d := s.dave
+	s.mut.RUnlock()
+
+	if d != nil {
+		var err error
+		b, err = d.Encrypt(s.udpManager.SSRC(), b)
+		if err != nil {
+			return 0, fmt.Errorf("DAVE encrypt: %w", err)
+		}
+	}
 	return s.udpManager.Write(b)
 }
 
@@ -505,7 +622,35 @@ func (s *Session) Write(b []byte) (int, error) {
 // thread safe, and must be used very carefully. The backing buffer is always
 // reused.
 func (s *Session) ReadPacket() (*udp.Packet, error) {
-	return s.udpManager.ReadPacket()
+	p, err := s.udpManager.ReadPacket()
+	if err != nil {
+		return nil, err
+	}
+
+	s.mut.RLock()
+	d := s.dave
+	s.mut.RUnlock()
+
+	if d != nil {
+		p.Opus, err = d.Decrypt(p.SSRC(), p.Opus)
+		if err != nil {
+			log.Printf("voice: DAVE decrypt (ssrc=%d): %v", p.SSRC(), err)
+			// Return packet with original bytes; don't kill the read loop.
+			return p, nil
+		}
+	}
+	return p, nil
+}
+
+// SetUserSSRC registers a Discord user's RTP SSRC for DAVE decryption routing.
+// Call this when a SpeakingEvent is received.
+func (s *Session) SetUserSSRC(userID discord.UserID, ssrc uint32) {
+	s.mut.RLock()
+	d := s.dave
+	s.mut.RUnlock()
+	if d != nil {
+		d.SetUserSSRC(userID, ssrc)
+	}
 }
 
 // Leave disconnects the current voice session from the currently connected
@@ -572,6 +717,15 @@ const (
 
 // close ensures everything is closed. It does not acquire the mutex.
 func (s *Session) ensureClosed() {
+	if s.dave != nil {
+		s.dave.Close()
+		s.dave = nil
+	}
+	for _, detach := range s.daveDone {
+		detach()
+	}
+	s.daveDone = nil
+
 	// Disconnect the UDP connection. If not permanent, then pause.
 	s.udpManager.Close()
 
