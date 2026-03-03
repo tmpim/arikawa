@@ -327,6 +327,10 @@ func (d *Decryptor) Close() {
 // TransitionToKeyRatchet updates the decryptor to use a new key ratchet.
 // The decryptor does NOT take ownership; the caller must keep the ratchet alive.
 func (d *Decryptor) TransitionToKeyRatchet(r *KeyRatchet) {
+	if r == nil {
+		C.daveDecryptorTransitionToKeyRatchet(d.h, nil)
+		return
+	}
 	C.daveDecryptorTransitionToKeyRatchet(d.h, r.h)
 }
 
