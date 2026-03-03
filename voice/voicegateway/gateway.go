@@ -143,10 +143,11 @@ type gatewayImpl Gateway
 
 func (g *gatewayImpl) sendIdentify(ctx context.Context) error {
 	id := IdentifyCommand{
-		GuildID:   g.state.GuildID,
-		UserID:    g.state.UserID,
-		SessionID: g.state.SessionID,
-		Token:     g.state.Token,
+		GuildID:             g.state.GuildID,
+		UserID:              g.state.UserID,
+		SessionID:           g.state.SessionID,
+		Token:               g.state.Token,
+		DAVEProtocolVersion: 1,
 	}
 	if !id.GuildID.IsValid() || id == (IdentifyCommand{}) {
 		return ErrMissingForIdentify

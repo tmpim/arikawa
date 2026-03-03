@@ -16,10 +16,11 @@ var OpUnmarshalers = ws.NewOpUnmarshalers()
 //
 // https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection-example-voice-identify-payload
 type IdentifyCommand struct {
-	GuildID   discord.GuildID `json:"server_id"` // yes, this should be "server_id"
-	UserID    discord.UserID  `json:"user_id"`
-	SessionID string          `json:"session_id"`
-	Token     string          `json:"token"`
+	GuildID             discord.GuildID `json:"server_id"` // yes, this should be "server_id"
+	UserID              discord.UserID  `json:"user_id"`
+	SessionID           string          `json:"session_id"`
+	Token               string          `json:"token"`
+	DAVEProtocolVersion uint16          `json:"dave_protocol_version,omitempty"`
 }
 
 // SelectProtocolCommand is a command for Op 1.
