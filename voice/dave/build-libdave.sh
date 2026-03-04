@@ -47,15 +47,18 @@ build_linux() {
 
     docker run --rm \
         --platform "$platform" \
-        -v "$SCRIPT_DIR:/work" \
-        -w /work \
-        debian:bookworm-slim \
-        bash -c "
+        -v "$ARIKAWA_ROOT:/arikawa" \
+        -w /arikawa/voice/dave \
+        alpine:3 \
+        sh -c "
             set -e
-            apt-get update -q
-            apt-get install -y -q --no-install-recommends \
-                cmake ninja-build clang git pkg-config \
-                curl zip unzip tar make ca-certificates
+            apk add --no-cache \
+                cmake ninja-build clang compiler-rt git pkgconf \
+                curl zip unzip tar make ca-certificates \
+                linux-headers musl-dev perl
+            export PATH=/usr/lib/ninja-build/bin:\$PATH
+            export CMAKE_POLICY_VERSION_MINIMUM=3.5
+            git config --global --add safe.directory /arikawa
             make
         "
 

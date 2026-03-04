@@ -20,7 +20,7 @@ $(INSTALL_DIR)/lib/libdave.a: $(LIBDAVE_CPP)/CMakeLists.txt
 		if [ ! -f "$(VCPKG_DIR)/bootstrap-vcpkg.sh" ]; then \
 			cd $(LIBDAVE_CPP) && git submodule update --init vcpkg; \
 		fi; \
-		cd $(VCPKG_DIR) && ./bootstrap-vcpkg.sh -disableMetrics; \
+		cd $(CURDIR)/$(VCPKG_DIR) && ./bootstrap-vcpkg.sh -disableMetrics; \
 	fi
 	$(MAKE) -C $(LIBDAVE_CPP) all install
 	@echo "Merging vcpkg dependency archives into libdave.a..."
