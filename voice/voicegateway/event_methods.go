@@ -16,7 +16,7 @@ func init() {
 		func() ws.Event { return new(ResumeCommand) },
 		func() ws.Event { return new(HelloEvent) },
 		func() ws.Event { return new(ResumedEvent) },
-		func() ws.Event { return new(ClientConnectEvent) },
+		func() ws.Event { return new(ClientsConnectEvent) },
 		func() ws.Event { return new(ClientDisconnectEvent) },
 		func() ws.Event { return new(DavePrepareTransitionEvent) },
 		func() ws.Event { return new(DaveExecuteTransitionEvent) },
@@ -92,11 +92,11 @@ func (*ResumedEvent) Op() ws.OpCode { return 9 }
 // EventType implements Event.
 func (*ResumedEvent) EventType() ws.EventType { return "" }
 
-// Op implements Event. It always returns Op 12.
-func (*ClientConnectEvent) Op() ws.OpCode { return 12 }
+// Op implements Event. It always returns Op 11.
+func (*ClientsConnectEvent) Op() ws.OpCode { return 11 }
 
 // EventType implements Event.
-func (*ClientConnectEvent) EventType() ws.EventType { return "" }
+func (*ClientsConnectEvent) EventType() ws.EventType { return "" }
 
 // Op implements Event. It always returns Op 13.
 func (*ClientDisconnectEvent) Op() ws.OpCode { return 13 }

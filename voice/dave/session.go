@@ -114,6 +114,18 @@ func (s *Session) SetUserSSRC(userID discord.UserID, ssrc uint32) {
 	s.setupDecryptorForUser(userID)
 }
 
+// InitAndSendKeyPackage initializes the MLS session for the given protocol
+// version and immediately sends the key package to the voice gateway.
+// This must be called when starting a DAVE session regardless of whether the
+// server sends DavePrepareEpoch, which is omitted when joining a channel that
+// already has active DAVE members.
+func (s *Session) InitAndSendKeyPackage(version uint16) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mls.Init(version, s.groupID, s.selfUserID.String())
+	return s.sendKeyPackage()
+}
+
 // OnPrepareEpoch handles DavePrepareEpochEvent (Op 24).
 func (s *Session) OnPrepareEpoch(epoch string, version uint16) error {
 	s.mu.Lock()
@@ -121,9 +133,6 @@ func (s *Session) OnPrepareEpoch(epoch string, version uint16) error {
 
 	if epoch == newGroupEpoch {
 		s.mls.Init(version, s.groupID, s.selfUserID.String())
-	}
-
-	if epoch == newGroupEpoch {
 		return s.sendKeyPackage()
 	}
 	return nil

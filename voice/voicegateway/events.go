@@ -20,7 +20,7 @@ type IdentifyCommand struct {
 	UserID              discord.UserID  `json:"user_id"`
 	SessionID           string          `json:"session_id"`
 	Token               string          `json:"token"`
-	DAVEProtocolVersion uint16          `json:"dave_protocol_version,omitempty"`
+	MaxDAVEProtocolVersion uint16          `json:"max_dave_protocol_version,omitempty"`
 }
 
 // SelectProtocolCommand is a command for Op 1.
@@ -63,9 +63,13 @@ func (r ReadyEvent) Addr() string {
 }
 
 // HeartbeatCommand is a command for Op 3.
+// Voice gateway v8 requires both a nonce and the last received sequence number.
 //
 // https://discord.com/developers/docs/topics/voice-connections#heartbeating-example-heartbeat-payload
-type HeartbeatCommand uint64
+type HeartbeatCommand struct {
+	Nonce  uint64 `json:"t"`
+	SeqAck int64  `json:"seq_ack"`
+}
 
 // SessionDescriptionEvent is an event for Op 4.
 //
@@ -103,12 +107,14 @@ type SpeakingEvent struct {
 type HeartbeatAckEvent uint64
 
 // ResumeCommand is a command for Op 7.
+// Voice gateway v8 requires seq_ack to indicate the last received sequence number.
 //
 // https://discord.com/developers/docs/topics/voice-connections#resuming-voice-connection-example-resume-connection-payload
 type ResumeCommand struct {
 	GuildID   discord.GuildID `json:"server_id"` // yes, this should be "server_id"
 	SessionID string          `json:"session_id"`
 	Token     string          `json:"token"`
+	SeqAck    int64           `json:"seq_ack"`
 }
 
 // HelloEvent is an event for Op 8.
@@ -122,11 +128,10 @@ type HelloEvent struct {
 // https://discord.com/developers/docs/topics/voice-connections#resuming-voice-connection-example-resumed-payload
 type ResumedEvent struct{}
 
-// ClientConnectEvent is an event for Op 12. It is undocumented.
-type ClientConnectEvent struct {
-	UserID    discord.UserID `json:"user_id"`
-	AudioSSRC uint32         `json:"audio_ssrc"`
-	VideoSSRC uint32         `json:"video_ssrc"`
+// ClientsConnectEvent is an event for Op 11. It is sent when one or more
+// clients have connected to the voice channel.
+type ClientsConnectEvent struct {
+	UserIDs []discord.UserID `json:"user_ids"`
 }
 
 // ClientDisconnectEvent is an event for Op 13. It is undocumented, but its
@@ -181,6 +186,9 @@ type MLSKeyPackageCommand struct {
 	KeyPackage []byte `json:"key_package"`
 }
 
+// BinaryPayload implements BinaryEvent. Op 26 is sent as a binary frame.
+func (c *MLSKeyPackageCommand) BinaryPayload() []byte { return c.KeyPackage }
+
 // MLSProposalsEvent is an event for Op 27.
 // Contains serialised MLS proposals from other group members. The client
 // processes them and sends back a commit+welcome.
@@ -194,6 +202,9 @@ type MLSProposalsEvent struct {
 type MLSCommitWelcomeCommand struct {
 	CommitWelcome []byte `json:"commit_welcome"`
 }
+
+// BinaryPayload implements BinaryEvent. Op 28 is sent as a binary frame.
+func (c *MLSCommitWelcomeCommand) BinaryPayload() []byte { return c.CommitWelcome }
 
 // MLSPrepareCommitTransitionEvent is an event for Op 29.
 // Contains an MLS commit that the client should process. If the client

@@ -11,7 +11,9 @@ package voicegateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +23,7 @@ import (
 )
 
 // Version represents the current version of the Discord Gateway Gateway this package uses.
-const Version = "4"
+const Version = "8"
 
 var (
 	ErrNoSessionID = errors.New("no sessionID was received")
@@ -44,8 +46,9 @@ type Gateway struct {
 	gateway *ws.Gateway
 	state   State // constant
 
-	mutex sync.RWMutex
-	ready *ReadyEvent
+	mutex  sync.RWMutex
+	ready  *ReadyEvent
+	seqAck int64 // last received sequence number from the server
 }
 
 // DefaultGatewayOpts contains the default options to be used for connecting to
@@ -76,10 +79,13 @@ var DefaultGatewayOpts = ws.GatewayOpts{
 // New creates a new voice gateway.
 func New(state State) *Gateway {
 	// https://discord.com/developers/docs/topics/voice-connections#establishing-a-voice-websocket-connection
-	endpoint := "wss://" + strings.TrimSuffix(state.Endpoint, ":80") + "/?v=" + Version
+	endpoint := "wss://" + strings.TrimSuffix(state.Endpoint, ":80") + "/?v=" + Version + "&encoding=json"
+
+	codec := ws.NewCodec(OpUnmarshalers)
+	codec.BinaryDecode = decodeBinaryVoiceFrame
 
 	gw := ws.NewGateway(
-		ws.NewWebsocket(ws.NewCodec(OpUnmarshalers), endpoint),
+		ws.NewWebsocket(codec, endpoint),
 		&DefaultGatewayOpts,
 	)
 
@@ -104,8 +110,12 @@ func (g *Gateway) LastError() error {
 	return g.gateway.LastError()
 }
 
-// Send is a function to send an Op payload to the Gateway.
+// Send sends an Op payload to the Gateway. Binary commands (ops 26, 28) are
+// sent as binary WebSocket frames; all other commands use JSON text frames.
 func (g *Gateway) Send(ctx context.Context, data ws.Event) error {
+	if binEv, ok := data.(BinaryEvent); ok {
+		return g.gateway.SendBinary(ctx, encodeBinaryFrame(binEv))
+	}
 	return g.gateway.Send(ctx, data)
 }
 
@@ -143,16 +153,18 @@ type gatewayImpl Gateway
 
 func (g *gatewayImpl) sendIdentify(ctx context.Context) error {
 	id := IdentifyCommand{
-		GuildID:             g.state.GuildID,
-		UserID:              g.state.UserID,
-		SessionID:           g.state.SessionID,
-		Token:               g.state.Token,
-		DAVEProtocolVersion: 1,
+		GuildID:                g.state.GuildID,
+		UserID:                 g.state.UserID,
+		SessionID:              g.state.SessionID,
+		Token:                  g.state.Token,
+		MaxDAVEProtocolVersion: 1,
 	}
 	if !id.GuildID.IsValid() || id == (IdentifyCommand{}) {
 		return ErrMissingForIdentify
 	}
 
+	b, _ := json.Marshal(id)
+	log.Printf("DEBUG voice Identify JSON: %s", b)
 	return g.gateway.Send(ctx, &id)
 }
 
@@ -161,14 +173,26 @@ func (g *gatewayImpl) sendResume(ctx context.Context) error {
 		return ErrMissingForResume
 	}
 
+	g.mutex.RLock()
+	seqAck := g.seqAck
+	g.mutex.RUnlock()
+
 	return g.gateway.Send(ctx, &ResumeCommand{
 		GuildID:   g.state.GuildID,
 		SessionID: g.state.SessionID,
 		Token:     g.state.Token,
+		SeqAck:    seqAck,
 	})
 }
 
 func (g *gatewayImpl) OnOp(ctx context.Context, op ws.Op) bool {
+	// Track the last received sequence number for heartbeat seq_ack.
+	if op.Sequence > 0 {
+		g.mutex.Lock()
+		g.seqAck = op.Sequence
+		g.mutex.Unlock()
+	}
+
 	switch data := op.Data.(type) {
 	case *HelloEvent:
 		g.gateway.ResetHeartbeat(data.HeartbeatInterval.Duration())
@@ -197,7 +221,14 @@ func (g *gatewayImpl) OnOp(ctx context.Context, op ws.Op) bool {
 }
 
 func (g *gatewayImpl) SendHeartbeat(ctx context.Context) {
-	heartbeat := HeartbeatCommand(time.Now().UnixNano())
+	g.mutex.RLock()
+	seqAck := g.seqAck
+	g.mutex.RUnlock()
+
+	heartbeat := HeartbeatCommand{
+		Nonce:  uint64(time.Now().UnixMilli()),
+		SeqAck: seqAck,
+	}
 	if err := g.gateway.Send(ctx, &heartbeat); err != nil {
 		g.gateway.SendErrorWrap(err, "heartbeat error")
 		g.gateway.QueueReconnect()

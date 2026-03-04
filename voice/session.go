@@ -432,6 +432,9 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 	var err error
 	var conn *udp.Connection
 	var daveReady bool
+	// Buffer user IDs from ClientsConnectEvent that arrive before the DAVE
+	// session is created, so they can be added once it exists.
+	var pendingUsers []discord.UserID
 
 	for {
 		select {
@@ -480,15 +483,28 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 					if err != nil {
 						return fmt.Errorf("failed to create DAVE session: %w", err)
 					}
-					s.mut.Lock()
 					s.dave = daveSession
-					s.mut.Unlock()
+					// Flush any users that connected before the DAVE session
+					// was created so they are recognized during Welcome.
+					for _, uid := range pendingUsers {
+						s.dave.AddUser(uid)
+					}
+					pendingUsers = nil
+					// InitAndSendKeyPackage must be called immediately when starting a
+					// DAVE session. DavePrepareEpochEvent (op 24) is omitted by Discord
+					// when joining a channel that already has active DAVE members, so we
+					// cannot rely solely on OnPrepareEpoch to drive initialization. If
+					// DavePrepareEpochEvent does arrive, OnPrepareEpoch will reinitialize.
+					if err := s.dave.InitAndSendKeyPackage(data.DAVEProtocolVersion); err != nil {
+						return fmt.Errorf("DAVE init key package: %w", err)
+					}
 					// Continue spinning to complete DAVE handshake.
 				} else {
 					return nil
 				}
 
 			case *voicegateway.DavePrepareEpochEvent:
+				log.Printf("DAVE: PrepareEpoch epoch=%s version=%d", data.Epoch, data.ProtocolVersion)
 				if s.dave != nil {
 					if err := s.dave.OnPrepareEpoch(data.Epoch, data.ProtocolVersion); err != nil {
 						return fmt.Errorf("DAVE prepare epoch: %w", err)
@@ -496,11 +512,13 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 				}
 
 			case *voicegateway.MLSExternalSenderPackageEvent:
+				log.Printf("DAVE: ExternalSenderPackage len=%d", len(data.Package))
 				if s.dave != nil {
 					s.dave.OnExternalSenderPackage(data.Package)
 				}
 
 			case *voicegateway.MLSProposalsEvent:
+				log.Printf("DAVE: Proposals len=%d", len(data.Proposals))
 				if s.dave != nil {
 					if err := s.dave.OnProposals(ctx, data.Proposals); err != nil {
 						return fmt.Errorf("DAVE proposals: %w", err)
@@ -508,6 +526,7 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 				}
 
 			case *voicegateway.MLSPrepareCommitTransitionEvent:
+				log.Printf("DAVE: PrepareCommitTransition id=%d commit_len=%d", data.TransitionID, len(data.Commit))
 				if s.dave != nil {
 					if err := s.dave.OnPrepareCommitTransition(ctx, data.TransitionID, data.Commit); err != nil {
 						return fmt.Errorf("DAVE prepare commit transition: %w", err)
@@ -515,13 +534,21 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 				}
 
 			case *voicegateway.MLSWelcomeEvent:
+				log.Printf("DAVE: Welcome id=%d welcome_len=%d", data.TransitionID, len(data.Welcome))
 				if s.dave != nil {
 					if err := s.dave.OnWelcome(ctx, data.TransitionID, data.Welcome); err != nil {
 						return fmt.Errorf("DAVE welcome: %w", err)
 					}
+					if data.TransitionID == 0 {
+						// Initial join via Welcome is complete. ExecuteTransition(0)
+						// is handled by wireDaveHandlers once the gateway loop starts.
+						daveReady = true
+						return nil
+					}
 				}
 
 			case *voicegateway.DavePrepareTransitionEvent:
+				log.Printf("DAVE: PrepareTransition id=%d version=%d", data.TransitionID, data.ProtocolVersion)
 				if s.dave != nil {
 					if err := s.dave.OnPrepareTransition(ctx, data.TransitionID, data.ProtocolVersion); err != nil {
 						return fmt.Errorf("DAVE prepare transition: %w", err)
@@ -529,6 +556,7 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 				}
 
 			case *voicegateway.DaveExecuteTransitionEvent:
+				log.Printf("DAVE: ExecuteTransition id=%d daveReady=%v", data.TransitionID, daveReady)
 				if s.dave != nil {
 					s.dave.OnExecuteTransition(data.TransitionID)
 					if !daveReady {
@@ -536,9 +564,21 @@ func (s *Session) spinGateway(ctx context.Context, gwch <-chan ws.Op) error {
 						return nil
 					}
 				}
+
+			case *voicegateway.ClientsConnectEvent:
+				// Register existing group members during the DAVE handshake so
+				// their credentials are recognized when processing Welcome.
+				for _, uid := range data.UserIDs {
+					if s.dave != nil {
+						s.dave.AddUser(uid)
+					} else {
+						pendingUsers = append(pendingUsers, uid)
+					}
+				}
 			}
 
 			// Dispatch this event to the handler.
+			log.Printf("spinGateway: dispatching op %d (%T)", ev.Code, ev.Data)
 			s.Handler.Call(ev.Data)
 		}
 	}
@@ -572,8 +612,10 @@ func (s *Session) wireDaveHandlers() {
 				log.Printf("voice: DAVE welcome: %v", err)
 			}
 		}),
-		s.Handler.AddHandler(func(ev *voicegateway.ClientConnectEvent) {
-			s.dave.AddUser(ev.UserID)
+		s.Handler.AddHandler(func(ev *voicegateway.ClientsConnectEvent) {
+			for _, uid := range ev.UserIDs {
+				s.dave.AddUser(uid)
+			}
 		}),
 		s.Handler.AddHandler(func(ev *voicegateway.ClientDisconnectEvent) {
 			s.dave.RemoveUser(ev.UserID)
