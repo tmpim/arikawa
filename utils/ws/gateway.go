@@ -166,6 +166,11 @@ func (g *Gateway) Opts() *GatewayOpts {
 	return &cpy
 }
 
+// SendBinary sends raw bytes as a binary WebSocket frame.
+func (g *Gateway) SendBinary(ctx context.Context, data []byte) error {
+	return g.ws.SendBinary(ctx, data)
+}
+
 // Send is a function to send an Op payload to the Gateway.
 func (g *Gateway) Send(ctx context.Context, data Event) error {
 	op := Op{

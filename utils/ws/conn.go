@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"bytes"
 	"compress/zlib"
 	"context"
 	"errors"
@@ -27,8 +28,11 @@ type Connection interface {
 	// timeout. This method should also be re-usable after Close is called.
 	Dial(context.Context, string) (<-chan Op, error)
 
-	// Send allows the caller to send bytes.
+	// Send allows the caller to send a text frame.
 	Send(context.Context, []byte) error
+
+	// SendBinary allows the caller to send a binary frame.
+	SendBinary(context.Context, []byte) error
 
 	// Close should close the websocket connection. The underlying connection
 	// may be reused, but this Connection instance will be reused with Dial. The
@@ -184,6 +188,15 @@ var resetDeadline = time.Time{}
 
 // Send implements Connection.
 func (c *Conn) Send(ctx context.Context, b []byte) error {
+	return c.sendMessage(ctx, websocket.TextMessage, b)
+}
+
+// SendBinary implements Connection.
+func (c *Conn) SendBinary(ctx context.Context, b []byte) error {
+	return c.sendMessage(ctx, websocket.BinaryMessage, b)
+}
+
+func (c *Conn) sendMessage(ctx context.Context, msgType int, b []byte) error {
 	c.mut.Lock()
 	conn := c.conn
 	c.mut.Unlock()
@@ -204,7 +217,7 @@ func (c *Conn) Send(ctx context.Context, b []byte) error {
 			}
 		}
 
-		return conn.WriteMessage(websocket.TextMessage, b)
+		return conn.WriteMessage(msgType, b)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -265,22 +278,37 @@ func (state *loopState) handle(ctx context.Context, opCh chan<- Op) error {
 	}
 
 	if t == websocket.BinaryMessage {
-		// Probably a zlib payload.
-
-		if state.zlib == nil {
-			z, err := zlib.NewReader(r)
-			if err != nil {
-				return fmt.Errorf("failed to create a zlib reader: %w", err)
-			}
-			state.zlib = z
-		} else {
-			if err := state.zlib.(zlib.Resetter).Reset(r, nil); err != nil {
-				return fmt.Errorf("failed to reset zlib reader: %w", err)
-			}
+		// Read the first byte to detect zlib (magic byte 0x78).
+		// Discord sends non-zlib binary frames for DAVE MLS protocol messages.
+		var magic [1]byte
+		if _, err := io.ReadFull(r, magic[:]); err != nil {
+			return fmt.Errorf("binary message read error: %w", err)
 		}
+		r = io.MultiReader(bytes.NewReader(magic[:]), r)
 
-		defer state.zlib.Close()
-		r = state.zlib
+		if magic[0] == 0x78 {
+			if state.zlib == nil {
+				z, err := zlib.NewReader(r)
+				if err != nil {
+					return fmt.Errorf("failed to create a zlib reader: %w", err)
+				}
+				state.zlib = z
+			} else {
+				if err := state.zlib.(zlib.Resetter).Reset(r, nil); err != nil {
+					return fmt.Errorf("failed to reset zlib reader: %w", err)
+				}
+			}
+			defer state.zlib.Close()
+			r = state.zlib
+		} else {
+			// Non-zlib binary frame (e.g. DAVE MLS protocol messages).
+			// r already contains the full frame (magic prepended via MultiReader).
+			data, _ := io.ReadAll(r)
+			if state.codec.BinaryDecode != nil {
+				return state.codec.BinaryDecode(ctx, data, opCh)
+			}
+			r = bytes.NewReader(data)
+		}
 	}
 
 	if err := state.codec.DecodeInto(ctx, r, &state.buf, opCh); err != nil {

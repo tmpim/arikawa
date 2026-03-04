@@ -67,6 +67,20 @@ func (ws *Websocket) Dial(ctx context.Context) (<-chan Op, error) {
 	return ws.conn.Dial(ctx, ws.addr)
 }
 
+// SendBinary sends b as a binary WebSocket frame with rate limiting.
+func (ws *Websocket) SendBinary(ctx context.Context, b []byte) error {
+	ws.mutex.Lock()
+	sendLimiter := ws.sendLimiter
+	conn := ws.conn
+	ws.mutex.Unlock()
+
+	if err := sendLimiter.Wait(ctx); err != nil {
+		return fmt.Errorf("SendLimiter failed: %w", err)
+	}
+
+	return conn.SendBinary(ctx, b)
+}
+
 // Send sends b over the Websocket with a deadline. It closes the internal
 // Websocket if the Send method errors out.
 func (ws *Websocket) Send(ctx context.Context, b []byte) error {

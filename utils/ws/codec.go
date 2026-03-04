@@ -15,6 +15,10 @@ import (
 type Codec struct {
 	Unmarshalers OpUnmarshalers
 	Headers      http.Header
+	// BinaryDecode, if non-nil, is called to decode non-zlib binary WebSocket
+	// frames instead of the default JSON decoder. data contains the full
+	// binary frame bytes.
+	BinaryDecode func(ctx context.Context, data []byte, out chan<- Op) error
 }
 
 // NewCodec creates a new default Codec instance.
