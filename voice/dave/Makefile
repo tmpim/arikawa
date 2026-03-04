@@ -29,9 +29,12 @@ $(INSTALL_DIR)/lib/libdave.a: $(LIBDAVE_CPP)/CMakeLists.txt
 	mkdir -p $(ABS_INSTALL_DIR)/lib/merge_tmp && \
 	cd $(ABS_INSTALL_DIR)/lib/merge_tmp && \
 		mkdir dave && (cd dave && ar x $(ABS_INSTALL_DIR)/lib/libdave.a) && \
+		EXTRA=""; \
+		if [ -f /usr/lib/libstdc++.a ]; then EXTRA=/usr/lib/libstdc++.a; fi; \
 		for lib in $$VCPKG_LIB/libmlspp.a $$VCPKG_LIB/libhpke.a \
 		            $$VCPKG_LIB/libtls_syntax.a $$VCPKG_LIB/libbytes.a \
-		            $$VCPKG_LIB/libssl.a $$VCPKG_LIB/libcrypto.a; do \
+		            $$VCPKG_LIB/libssl.a $$VCPKG_LIB/libcrypto.a \
+		            $$EXTRA; do \
 			name=$$(basename $$lib .a) && mkdir $$name && (cd $$name && ar x $$lib); \
 		done && \
 		ar rcs $(ABS_INSTALL_DIR)/lib/libdave.a */*.o

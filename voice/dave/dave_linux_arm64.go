@@ -6,6 +6,6 @@
 package dave
 
 /*
-#cgo LDFLAGS: ${SRCDIR}/lib/linux_arm64/libdave.a -lstdc++ -lm
+#cgo LDFLAGS: ${SRCDIR}/lib/linux_arm64/libdave.a -lm
 */
 import "C"

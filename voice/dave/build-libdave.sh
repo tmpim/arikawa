@@ -58,6 +58,7 @@ build_linux() {
                 linux-headers musl-dev perl
             export PATH=/usr/lib/ninja-build/bin:\$PATH
             export CMAKE_POLICY_VERSION_MINIMUM=3.5
+            export CC=clang CXX=clang++
             git config --global --add safe.directory /arikawa
             make
         "
